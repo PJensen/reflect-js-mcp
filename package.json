@@ -1,0 +1,35 @@
+{
+  "name": "reflect-js",
+  "version": "0.1.0",
+  "description": "Structural reflection for JS/TS repos over MCP",
+  "type": "module",
+  "main": "dist/server.js",
+  "bin": {
+    "reflect-js": "dist/server.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/server.js",
+    "dev": "tsx src/server.ts",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "@babel/parser": "^7.26.0",
+    "@babel/traverse": "^7.26.0",
+    "@babel/types": "^7.26.0",
+    "@modelcontextprotocol/sdk": "^1.12.0",
+    "fast-glob": "^3.3.0",
+    "picomatch": "^4.0.0"
+  },
+  "devDependencies": {
+    "@types/babel__traverse": "^7.20.0",
+    "@types/node": "^22.0.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0",
+    "vitest": "^3.0.0"
+  },
+  "engines": {
+    "node": ">=22.0.0"
+  }
+}
