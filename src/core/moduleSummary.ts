@@ -12,6 +12,7 @@ import type {
   ExportInfo,
   DeclarationInfo,
   FunctionSummary,
+  ClosureCapture,
   ClassSummary,
   SourceLocation,
 } from "../types/module.js";
@@ -62,6 +63,11 @@ function extractCallNames(body: t.Node): { out: string[]; internal: string[] } {
 
   return { out: [...new Set(out)], internal: [...new Set(internal)] };
 }
+
+const MUTATING_METHODS = new Set([
+  "push", "pop", "shift", "unshift", "splice", "sort", "reverse", "fill",
+  "set", "delete", "clear", "add",
+]);
 
 function extractFunctionSummary(
   name: string,
@@ -271,6 +277,171 @@ export function summarizeModule(source: string, filePath: string, config: Reflec
     lineCount: source.split("\n").length,
     parseErrors,
   };
+}
+
+/**
+ * Resolve the name of a function path node.
+ */
+function resolveFunctionName(path: any): string {
+  const node = path.node;
+  if (t.isFunctionDeclaration(node) && node.id) return node.id.name;
+  if (path.parent && t.isVariableDeclarator(path.parent) && t.isIdentifier(path.parent.id)) return path.parent.id.name;
+  if (path.parent && t.isObjectProperty(path.parent) && t.isIdentifier(path.parent.key)) return path.parent.key.name;
+  return "(anonymous)";
+}
+
+/**
+ * Analyze closure captures for all (or one named) function(s) in a file.
+ * Single-pass scope-aware AST traversal — every ReferencedIdentifier is checked
+ * against its binding scope to detect captures from ancestor functions.
+ */
+export function analyzeClosures(
+  source: string,
+  filePath: string,
+  config: ReflectConfig,
+  functionName?: string,
+): Array<{ name: string; kind: string; loc: SourceLocation; closureCaptures: ClosureCapture[] }> {
+  const ast = parseSource(source, filePath, config);
+
+  // Per-function accumulator: keyed by the function AST node (identity)
+  type FuncAcc = {
+    name: string;
+    kind: string;
+    loc: SourceLocation;
+    reads: Set<string>;
+    writes: Set<string>;
+    info: Map<string, { declaredIn: string; declaredLine: number }>;
+  };
+  const accByNode = new Map<t.Node, FuncAcc>();
+
+  try {
+    traverse(ast, {
+      ReferencedIdentifier(path: any) {
+        const varName: string = path.node.name;
+
+        const binding = path.scope.getBinding(varName);
+        if (!binding) return; // global / builtin
+
+        const bindingScope = binding.scope;
+        // Find the innermost function scope containing this reference
+        const myFuncScope = path.scope.getFunctionParent();
+        if (!myFuncScope) return;
+        // If the binding is in THIS function's scope, it's local — not a capture
+        if (bindingScope === myFuncScope) return;
+        // If the binding is at program/module scope, skip
+        if (bindingScope.path.isProgram()) return;
+        // The binding is in an ancestor function scope — this is a closure capture
+
+        // Walk up to the nearest *named* function scope for attribution.
+        // Anonymous callbacks (arrows inside world.on(...)) should attribute
+        // their captures to the enclosing named function.
+        let attrScope = myFuncScope;
+        while (attrScope && resolveFunctionName(attrScope.path) === "(anonymous)") {
+          const parentScope = attrScope.parent;
+          if (!parentScope || parentScope.path.isProgram()) break;
+          const parentFuncScope = parentScope.path.isFunction() ? parentScope : parentScope.getFunctionParent?.();
+          if (!parentFuncScope || parentFuncScope === attrScope) break;
+          attrScope = parentFuncScope;
+        }
+        // If the attributed scope IS the binding scope, it's not a capture
+        if (attrScope && bindingScope === attrScope) return;
+
+        const funcNode: t.Node = attrScope.path.node;
+        let acc = accByNode.get(funcNode);
+        if (!acc) {
+          const fnPath = attrScope.path;
+          const name = resolveFunctionName(fnPath);
+          if (functionName && name !== functionName) return;
+          acc = {
+            name,
+            kind: t.isArrowFunctionExpression(funcNode) ? "arrow" : "function",
+            loc: toLoc(funcNode as any),
+            reads: new Set(),
+            writes: new Set(),
+            info: new Map(),
+          };
+          accByNode.set(funcNode, acc);
+        } else if (functionName && acc.name !== functionName) {
+          return;
+        }
+
+        // Record declaration info
+        if (!acc.info.has(varName)) {
+          let declFuncName = "(anonymous)";
+          if (bindingScope.path.isFunction()) {
+            declFuncName = resolveFunctionName(bindingScope.path);
+          }
+          const declLine = binding.path.node?.loc?.start?.line ?? 0;
+          acc.info.set(varName, { declaredIn: declFuncName, declaredLine: declLine });
+        }
+
+        // Classify read vs write
+        const parent = path.parent;
+        if (t.isAssignmentExpression(parent) && path.key === "left") {
+          acc.writes.add(varName);
+        } else if (t.isUpdateExpression(parent)) {
+          acc.writes.add(varName);
+          acc.reads.add(varName);
+        } else if (
+          t.isMemberExpression(parent) &&
+          parent.object === path.node &&
+          t.isIdentifier(parent.property) &&
+          MUTATING_METHODS.has(parent.property.name) &&
+          path.parentPath?.parent &&
+          t.isCallExpression(path.parentPath.parent) &&
+          path.parentPath.parent.callee === parent
+        ) {
+          acc.writes.add(varName);
+        } else {
+          acc.reads.add(varName);
+        }
+      },
+    });
+  } catch {
+    return [];
+  }
+
+  // If a specific function was requested but had no captures, still include it
+  if (functionName && accByNode.size === 0) {
+    // Find the function node to get its location
+    let found = false;
+    traverse(ast, {
+      noScope: true,
+      "FunctionDeclaration|FunctionExpression|ArrowFunctionExpression"(path: any) {
+        if (found) return;
+        const name = resolveFunctionName(path);
+        if (name === functionName) {
+          found = true;
+          accByNode.set(path.node, {
+            name,
+            kind: t.isArrowFunctionExpression(path.node) ? "arrow" : "function",
+            loc: toLoc(path.node),
+            reads: new Set(),
+            writes: new Set(),
+            info: new Map(),
+          });
+        }
+      },
+    });
+  }
+
+  const results: Array<{ name: string; kind: string; loc: SourceLocation; closureCaptures: ClosureCapture[] }> = [];
+  for (const acc of accByNode.values()) {
+    const captures: ClosureCapture[] = [];
+    for (const [varName, info] of acc.info) {
+      const isRead = acc.reads.has(varName);
+      const isWrite = acc.writes.has(varName);
+      const mode: ClosureCapture["mode"] = isRead && isWrite ? "readwrite" : isWrite ? "write" : "read";
+      captures.push({ name: varName, mode, declaredIn: info.declaredIn, declaredLine: info.declaredLine });
+    }
+    captures.sort((a, b) => a.name.localeCompare(b.name));
+
+    if (captures.length > 0 || functionName) {
+      results.push({ name: acc.name, kind: acc.kind, loc: acc.loc, closureCaptures: captures });
+    }
+  }
+
+  return results;
 }
 
 function extractClass(name: string, node: t.ClassDeclaration | t.ClassExpression): ClassSummary {

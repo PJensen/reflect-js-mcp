@@ -27,6 +27,13 @@ export interface DeclarationInfo {
   loc: SourceLocation;
 }
 
+export interface ClosureCapture {
+  name: string;
+  mode: "read" | "write" | "readwrite";
+  declaredIn: string;
+  declaredLine: number;
+}
+
 export interface FunctionSummary {
   name: string;
   kind: "function" | "method" | "arrow" | "getter" | "setter" | "constructor";
@@ -38,6 +45,7 @@ export interface FunctionSummary {
   complexity: number;
   callsOut: string[];
   callsInternal: string[];
+  closureCaptures?: ClosureCapture[];
 }
 
 export interface ClassSummary {

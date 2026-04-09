@@ -21,6 +21,7 @@ import { handleCallGraph } from "./tools/callGraph.js";
 import { handleHotspots } from "./tools/hotspots.js";
 import { handleArchitecturalSlice } from "./tools/architecturalSlice.js";
 import { handleRefreshIndex } from "./tools/refreshIndex.js";
+import { handleClosureCaptures } from "./tools/closureCaptures.js";
 
 async function main() {
   const rootArg = process.argv[2];
@@ -150,6 +151,17 @@ async function main() {
       limit: z.number().optional().describe("Max results"),
     },
     (args) => handleArchitecturalSlice(config, cache, symbolIndex, inventory, args),
+  );
+
+  // 13. closure_captures
+  server.tool(
+    "closure_captures",
+    "Analyze closure variable captures for functions in a file — shows which variables are captured from parent scopes and whether they are read, written, or both",
+    {
+      filePath: z.string().describe("Path to the file to analyze"),
+      functionName: z.string().optional().describe("Analyze only this function (omit for all)"),
+    },
+    (args) => handleClosureCaptures(config, cache, symbolIndex, args),
   );
 
   // 12. refresh_index
