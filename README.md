@@ -12,6 +12,22 @@ It scans a repo and exposes tools for:
 - call graph and closure-capture analysis
 - architectural and hotspot exploration
 
+## Available tools
+
+- `ping` — Health check.
+- `project_summary` — Top-level repo information.
+- `list_project_files` — Bounded file listing with optional glob/prefix filtering.
+- `read_file_region` — Read a bounded code excerpt by path and line range.
+- `reflect_module` — Structural summary of one module (imports/exports/declarations/functions/classes).
+- `reflect_functions` — Function-level structural summaries for one file.
+- `find_symbol` — Locate symbol definitions across the indexed codebase.
+- `module_graph` — Bounded dependency graph centered on a file or subtree.
+- `call_graph` — Static call graph hints for a file or function.
+- `hotspots` — Rank structurally important or risky code locations.
+- `architectural_slice` — Best-effort subsystem slice for a concern.
+- `closure_captures` — Analyze closure variable captures for functions in a file.
+- `refresh_index` — Re-scan the repo and invalidate stale cache entries.
+
 ## Why it exists
 
 Large codebases are hard for humans and agents to navigate quickly. This server provides compact, bounded, structural context so developer workflows and MCP clients can answer “where is this defined?”, “what depends on this?”, and “what looks risky?” without loading the whole repository.
